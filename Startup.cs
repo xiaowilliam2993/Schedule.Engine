@@ -35,6 +35,7 @@ namespace Dispatcher
                 options.SerializerSettings.Converters.Add(new StringEnumConverter { CamelCaseText = true });
             });
             services.AddSingleton(provider => provider.GetService<IConfiguration>().GetSection("Tenants").Get<IEnumerable<Tenant>>());
+            services.AddSingleton(provider => provider.GetService<IConfiguration>().GetSection("Crawler").Get<IEnumerable<Crawler>>());
             services.AddSwaggerGen(c => c.SwaggerDoc("v1", new OpenApiInfo() { Title = "Dispatcher api", Version = "v1" }));
             services.AddHealthChecks();
 
@@ -45,7 +46,9 @@ namespace Dispatcher
             });
             services.AddScoped<IDispatchService, DispatchServiceImpl>();
             services.AddScoped<IEngineService, EngineServiceImpl>();
-            services.AddScoped<IMySqlService, MySqlService>();
+            services.AddScoped<IMySqlService, MySqlServiceImpl>();
+            services.AddScoped<IDwthService, DwthServiceImpl>();
+            services.AddScoped<ICrawlerService, CrawlerServiceImpl>();
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
@@ -81,8 +84,10 @@ namespace Dispatcher
             string initializeFilePath = Path.Combine(AppContext.BaseDirectory, ".initialized");
             if (!File.Exists(initializeFilePath))
             {
-                RecurringJob.AddOrUpdate<IEngineService>(services => services.AutoUpdate(), Configuration.GetValue("Hangfire:AutoUpdate_CronExpression", "0 0/5 * * * ? "), TimeZoneInfo.Local);
-                RecurringJob.AddOrUpdate<IDispatchService>(services => services.DeleteInvalidPhysicalTables(), Configuration.GetValue("Hangfire:DeleteInvalidPyhsicalTable_CronExpression", "0 0 2 * * ? "), TimeZoneInfo.Local);
+                RecurringJob.AddOrUpdate<IEngineService>(services => services.AutoUpdate(), Configuration.GetValue("Hangfire:CronExpression:AutoUpdate", "0 0/5 * * * ? "), TimeZoneInfo.Local);
+                RecurringJob.AddOrUpdate<IDispatchService>(services => services.DeleteInvalidPhysicalTables(), Configuration.GetValue("Hangfire:CronExpression:DeleteInvalidPyhsicalTable", "0 0 2 * * ? "), TimeZoneInfo.Local);
+                RecurringJob.AddOrUpdate<ICrawlerService>(services => services.ImportFinanceialReport(FinanceArea.TW), Configuration.GetValue("Hangfire:CronExpression:ImportFinanceialReport_TW", "0 0 20 21 4,5,8,11 ? "), TimeZoneInfo.Local);
+                //RecurringJob.AddOrUpdate<ICrawlerService>(services => services.ImportFinanceialReport(FinanceArea.CN), Configuration.GetValue("Hangfire:CronExpression:ImportFinanceialReport_CN", "0 0 20 16 5,6,9,12 ? "), TimeZoneInfo.Local);
 
                 File.Create(initializeFilePath);
             }

@@ -9,6 +9,7 @@ namespace Dispatcher.Services
     {
         int ExecuteNonQuery(Guid taskId, MySqlCommand command, string sql, bool logSwitch = true);
         MySqlDataReader ExecuteReader(Guid taskId, MySqlCommand command, string sql, bool logSwitch = true);
+        DataTable ExecuteWithAdapter(MySqlConnection connection, string sql);
         DataTable ExecuteWithAdapter(Guid taskId, MySqlConnection connection, string sql, bool logSwitch = true);
         int BulkCopy(Guid taskId, string tableFullName, MySqlConnection connection, DataTable dataTable, IEnumerable<string> columnFields);
         bool IsTableExists(Guid taskId, string tableFullName, MySqlCommand command, bool logSwitch = true);

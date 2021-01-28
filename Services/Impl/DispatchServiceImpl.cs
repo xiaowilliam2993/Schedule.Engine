@@ -104,6 +104,7 @@ namespace Dispatcher.Services.Impl
             {
                 _logger.LogError(ex, $"taskId={taskId}，更新实体表发生错误，DataSourceId={dataSource.DataSourceId}，Name={dataSource.Name}");
                 dataSource.UpdateStatus = UpdateStatusType.Fail;
+                SaveLog(dataContext, dataSource, $"调度任务执行失败：{ex.Message}", UpdateLogCategory.Exception);
                 throw ex;
             }
 
@@ -125,7 +126,8 @@ namespace Dispatcher.Services.Impl
             //保存更新日志
             try
             {
-                AddDataSourceUpdateLog(taskId, tenant, dataSource, new Tuple<int, int, DateTime>(updateContext.Item1, updateContext.Item2, startDate));
+                //AddDataSourceUpdateLog(taskId, tenant, dataSource, new Tuple<int, int, DateTime>(updateContext.Item1, updateContext.Item2, startDate));
+                SaveLog(dataContext, dataSource, updateContext.Item3 ? "新建成功" : "更新成功", UpdateLogCategory.Information);
             }
             catch (Exception ex)
             {
@@ -156,32 +158,76 @@ namespace Dispatcher.Services.Impl
                     isNewDataSource = true;
                 }
                 DataTable prepareData = _mySqlService.ExecuteWithAdapter(taskId, connection, $"select * from ({dataSource.UpdateSql}) tab1 limit 0,1");//预执行UpdateSql，检验源SQL的有效性
-                _mySqlService.ExecuteNonQuery(taskId, command, $"create table `{newTableName}` {dataSource.UpdateSql}");//创建新的物理表
-                if (dataSource.Reference != "jointable" || (dataSource.Reference == "jointable" && !_mySqlService.IsFieldExists(taskId, newTableName, "key_id", command)))
+                try
                 {
-                    _mySqlService.ExecuteNonQuery(taskId, command, $"alter table `{newTableName}` add `key_id` int AUTO_INCREMENT primary key");//自动创建自增列，jointable不需要做这一步操作，UpdateSql会自动创建自增列
+                    _mySqlService.ExecuteNonQuery(taskId, command, $"create table `{newTableName}` {dataSource.UpdateSql}");//创建新的物理表
+                
+                    if (dataSource.Reference != "jointable" || (dataSource.Reference == "jointable" && !_mySqlService.IsFieldExists(taskId, newTableName, "key_id", command)))
+                    {
+                        _mySqlService.ExecuteNonQuery(taskId, command, $"alter table `{newTableName}` add `key_id` int AUTO_INCREMENT primary key");//自动创建自增列，jointable不需要做这一步操作，UpdateSql会自动创建自增列
+                    }
+                    _mySqlService.ExecuteNonQuery(taskId, command, $"alter table `{newTableName}` convert to character set utf8mb4 collate utf8mb4_unicode_ci");//修正排序规则
+                    CreateIndexForNewTable(taskId, command, dataSource.TableName, newTableName);//自动创建索引
+                    if (!isNewDataSource)
+                    {
+                        TryDeleteInvalidTable(taskId, tenant, command, dataSource.TableName);
+                        string invalidTableName = $"invalid_{Guid.NewGuid():N}";
+                        _mySqlService.ExecuteNonQuery(taskId, command, $"alter table `{dataSource.TableName}` rename as `{invalidTableName}`");//注意：表名最长不可以超过64个字符
+                        try
+                        {
+                            AddTableInvalidHistory(taskId, tenant, dataSource.TableName, invalidTableName);//保存物理表失效记录
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError($"taskId={taskId}，写入物理表失效历史记录发生错误", ex);
+                        }
+                    }
+                    _mySqlService.ExecuteNonQuery(taskId, command, $"alter table `{newTableName}` rename as `{dataSource.TableName}`");//替换新的物理表
                 }
-                _mySqlService.ExecuteNonQuery(taskId, command, $"alter table `{newTableName}` convert to character set utf8mb4 collate utf8mb4_unicode_ci");//修正排序规则
-                CreateIndexForNewTable(taskId, command, dataSource.TableName, newTableName);//自动创建索引
-                if (!isNewDataSource)
+                catch (Exception)
                 {
-                    string invalidTableName = $"invalid_{Guid.NewGuid():N}";
-                    _mySqlService.ExecuteNonQuery(taskId, command, $"alter table `{dataSource.TableName}` rename as `{invalidTableName}`");//注意：表名最长不可以超过64个字符
-                    try
-                    {
-                        AddTableInvalidHistory(taskId, tenant, dataSource.TableName, invalidTableName);//保存物理表失效记录
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError($"taskId={taskId}，写入物理表失效历史记录发生错误", ex);
-                    }
+                    _logger.LogInformation($"taskId={taskId}，创建新表发生致命错误，尝试删除已生成的新表 `{newTableName}`");
+                    _mySqlService.ExecuteNonQuery(taskId, command, $"drop table if exists `{newTableName}`");
+                    _logger.LogInformation($"taskId={taskId}，成功删除新表 `{newTableName}`");
+                    throw;
                 }
-                _mySqlService.ExecuteNonQuery(taskId, command, $"alter table `{newTableName}` rename as `{dataSource.TableName}`");//替换新的物理表
                 int afterUpdateRows = _mySqlService.GetRowCount(taskId, command, dataSource.TableName);//记录更新后的数据总行数
                 return new Tuple<int, int, bool>(beforeUpdateRows, afterUpdateRows, isNewDataSource);
             };
         }
-
+        /// <summary>
+        /// 物理表失效之前，反向查找是否存在已失效的物理表，有则立即删除，避免在大并发的情况下短时间内生成大量失效的物理表浪费磁盘空间
+        /// </summary>
+        /// <param name="taskId"></param>
+        /// <param name="dataCommand"></param>
+        /// <param name="tableName"></param>
+        private void TryDeleteInvalidTable(Guid taskId, Tenant tenant, MySqlCommand dataCommand, string tableName)
+        {
+            using MySqlConnection masterConnection = new MySqlConnection(tenant.ConnectionStrings.Master);
+            try
+            {
+                masterConnection.Open();
+                using MySqlCommand masterCommand = new MySqlCommand { Connection = masterConnection };
+                var historyData = _mySqlService.ExecuteWithAdapter(taskId, masterConnection, $"select * from tableinvalidhistory where TableName = '{tableName}'");
+                foreach (DataRow dataRow in historyData.Rows)
+                {
+                    string invalidTableName = dataRow["InvaildTableName"].ToString();
+                    if (_mySqlService.IsTableExists(taskId, invalidTableName, dataCommand))
+                    {
+                        _mySqlService.ExecuteNonQuery(taskId, dataCommand, $"drop table if exists `{invalidTableName}`");
+                    }
+                    _mySqlService.ExecuteNonQuery(taskId, masterCommand, $"delete from `tableinvalidhistory` where `InvaildTableName` = '{invalidTableName}'");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"taskId={taskId}，尝试删除失效物理表发生错误：{ex.Message}");
+            }
+            finally
+            {
+                if (masterConnection != null && masterConnection.State == ConnectionState.Open) masterConnection.Close();
+            }
+        }
         /// <summary>
         /// 自动创建索引
         /// </summary>
@@ -351,6 +397,19 @@ VALUES ('{Guid.NewGuid()}','{dataSource.DataSourceId}','{updateContext.Item3:yyy
                 }
             }
         }
+        private void SaveLog(DataContext dataContext, DataSource dataSource, string message, UpdateLogCategory category)
+        {
+            dataContext.DataHistory.Add(new DataHistory
+            {
+                DataHistoryId = Guid.NewGuid(),
+                DataSourceId = dataSource.DataSourceId,
+                Changetime = dataSource.UpdateDate,
+                Describe = message,
+                SyncHistoryId = Guid.Empty,
+                Category = category,
+                OccursToStage = OccursToStage.Cloud
+            });
+        }
         /// <summary>
         /// 删除失效的物理表
         /// </summary>
@@ -401,7 +460,7 @@ VALUES ('{Guid.NewGuid()}','{dataSource.DataSourceId}','{updateContext.Item3:yyy
                         using MySqlCommand command = new MySqlCommand { Connection = masterConnection };
                         foreach (var invalidTableName in invalidTables)
                         {
-                            _mySqlService.ExecuteNonQuery(taskId, command, $"delete from `tableinvalidhistory` where `InvalidTableName` = `{invalidTableName}`");
+                            _mySqlService.ExecuteNonQuery(taskId, command, $"delete from `tableinvalidhistory` where `InvaildTableName` = '{invalidTableName}'");
                         }
                     }
                     catch (Exception ex)

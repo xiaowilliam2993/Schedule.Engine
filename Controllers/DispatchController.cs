@@ -16,13 +16,11 @@ namespace Dispatcher.Controllers
     {
         private readonly ILogger<DispatchController> _logger;
         private readonly IEnumerable<Tenant> _tenants;
-        private readonly IMySqlService _mySqlService;
 
-        public DispatchController(ILogger<DispatchController> logger, IEnumerable<Tenant> tenants, IMySqlService mySqlService)
+        public DispatchController(ILogger<DispatchController> logger, IEnumerable<Tenant> tenants)
         {
             _logger = logger;
             _tenants = tenants;
-            _mySqlService = mySqlService;
         }
         [HttpGet]
         public string Get()
@@ -36,18 +34,16 @@ namespace Dispatcher.Controllers
         /// <returns></returns>
         [HttpPut]
         [Route("task/{dataSourceId}")]
-        public ActionResult Put(Guid dataSourceId, [FromQuery] string url)
+        public ActionResult Put(Guid dataSourceId, [FromQuery] string masterData, [FromQuery] string url)
         {
-            _logger.LogInformation($"put dispatch task, params: dataSourceId={dataSourceId}, url={url}");
+            _logger.LogInformation($"put dispatch task, params: dataSourceId={dataSourceId}, masterData={masterData}, applicationUrl={url}");
 
             try
             {
-                var tenant = _tenants.First(_ => 
-                    string.Equals(_.ApplicationUrl, url, StringComparison.OrdinalIgnoreCase) || 
-                    string.Equals(_.DevelopUrl, url, StringComparison.OrdinalIgnoreCase));
+                var tenant = _tenants.FirstOrDefault(_ => string.Equals(_.MasterData, masterData, StringComparison.OrdinalIgnoreCase) || string.Equals(_.ApplicationUrl, url, StringComparison.OrdinalIgnoreCase));
                 if (tenant == null)
                 {
-                    throw new KeyNotFoundException(url);
+                    throw new KeyNotFoundException(masterData);
                 }
 
                 BackgroundJob.Enqueue<IEngineService>(services => services.UpdateTask(tenant, dataSourceId, UpdateMode.FromApi));
@@ -55,7 +51,8 @@ namespace Dispatcher.Controllers
                 _logger.LogInformation("调度任务生成成功");
 
                 return Ok();
-            } catch (Exception ex)
+            } 
+            catch (Exception ex)
             {
                 _logger.LogError(ex, "生成调度任务发生错误");
                 return BadRequest(ex.Message);

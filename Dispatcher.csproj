@@ -2,14 +2,15 @@
 
   <PropertyGroup>
     <TargetFramework>netcoreapp3.1</TargetFramework>
-    <Version>1.1.0.1</Version>
-    <AssemblyVersion>1.1.0.1</AssemblyVersion>
-    <PackageReleaseNotes></PackageReleaseNotes>
+    <Version>1.1.0.7</Version>
+    <AssemblyVersion>1.1.0.7</AssemblyVersion>
+    <PackageReleaseNotes>合表自动更新机制支持指标数据来源</PackageReleaseNotes>
     <Product>TipBiuBI Dispatcher</Product>
     <Description>TipBiuBI 调度引擎</Description>
     <Authors>Fu Wei</Authors>
     <Copyright>版权所有 鼎捷软件股份有限公司</Copyright>
     <Company>鼎捷软件股份有限公司</Company>
+    <FileVersion>1.1.0.7</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -34,6 +35,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Update="README.md">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
     <None Update="Repository\Hangfire.db">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>

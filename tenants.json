@@ -1,9 +1,9 @@
 {
   "Tenants": [
     {
-      "Name": "43_developer",
+      "Name": "43_develop",
       "ApplicationUrl": "http://172.16.1.43:8064",
-      "DevelopUrl": "http://localhost:8080",
+      "MasterData": "margin_mysql0730",
       "ConnectionStrings": {
         "Master": "server=172.16.1.43;port=3306;database=margin_mysql0730;uid=root;password=dcms@123;AllowLoadLocalInfile=true;Convert Zero Datetime=true;charset=utf8mb4",
         "Data": "server=172.16.1.43;port=3306;database=margin_mysql0730data;uid=root;password=dcms@123;AllowLoadLocalInfile=true;Convert Zero Datetime=true;charset=utf8mb4"

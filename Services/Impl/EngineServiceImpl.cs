@@ -7,6 +7,7 @@ using Hangfire;
 using Newtonsoft.Json;
 using Microsoft.Extensions.Logging;
 using Margin.Core.Utils;
+using System.Net.Http;
 
 namespace Dispatcher.Services.Impl
 {
@@ -49,7 +50,7 @@ namespace Dispatcher.Services.Impl
                         var basedslist = context.DataSource.Where(_ =>
                             _.ProjectId != null//排除文件夹
                             && (_.Reference == "Sync" || _.Reference == "Excel" || _.Reference == "TRANSPOSE")//底层表的类型限定为：同步客户端上传、Excel导入、二维转一维
-                            && _.TableName != "indicatorwarehouse"//排除指标数据源
+                            //&& _.TableName != "indicatorwarehouse"//排除指标数据源
                             && !string.IsNullOrEmpty(_.Hashcode)//Hashcode是新增字段，增加此条件是为了兼容旧数据，如果工作表更新过，Hashcode会重现生成
                         ).ToArray();
                         IList<Guid> composedsidlist = new List<Guid>();
@@ -130,12 +131,28 @@ namespace Dispatcher.Services.Impl
                             }
                         }
                     }
+                    try
+                    {
+                        //触发转置数据源更新
+                        string url = $"{tenant.ApplicationUrl}/api/data_source/transpose/{dataSourceId}/refresh";
+                        using HttpClient httpClient = new HttpClient
+                        {
+                            BaseAddress = new Uri(url)
+                        };
+                        HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, string.Empty);
+                        HttpResponseMessage response = httpClient.SendAsync(request).Result;
+                        _logger.LogInformation($"触发转置数据源更新, url={url}, status={response.StatusCode}, result={response.Content.ReadAsStringAsync().Result}");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, $"触发转置数据源更新发生错误：{ex.Message}");
+                    }
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"taskId={taskId}，调度任务执行失败: params tenant={JsonConvert.SerializeObject(tenant)}, params dataSourceId={dataSourceId}");
-                throw ex;
+                //throw ex;//自动更新整个过程都是DB级别的操作，一旦出现错误都是致命性的，重试已经没有意义了
             }
         }
     }
